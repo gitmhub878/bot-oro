@@ -17,7 +17,8 @@ MI_CHAT_ID = "1820732318"
 URL_TELEGRAM = f"https://api.telegram.org/bot{TOKEN_BOT}"
 GOLD_API_KEY = "goldapi-ff74bdecd701477d4a6eb79850b6e8f1-io" 
 
-# 🛡️ LISTA BLANCA DE PRIVACIDAD
+# 🛡️ LISTA BLANCA DE PRIVACIDAD (¡Añade aquí el ID de tu marido separado por una coma!)
+# Ejemplo: [1820732318, 987654321]
 USUARIOS_AUTORIZADOS = [1820732318]
 
 # ==========================================
@@ -40,7 +41,6 @@ def obtener_precio_oro_realtime():
         return None
 
 def generar_datos_simulados_para_indicadores(precio_actual):
-    # Genera datos que cambian de tendencia de verdad (sin seed fija)
     fechas = pd.date_range(end=pd.Timestamp.now(), periods=500, freq='15min')
     cambios = np.random.normal(loc=0.0, scale=1.5, size=500)
     precios_simulados = precio_actual + np.cumsum(cambios) - np.sum(cambios)
@@ -260,19 +260,18 @@ def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
     if precio_actual is None:
         return
         
-    # 1. Generamos y analizamos datos para Scalping (15m)
+    # 1. Analizar Scalping (15m)
     df_15 = generar_datos_simulados_para_indicadores(precio_actual)
     df_15['EMA_50'] = df_15['close'].ewm(span=50, adjust=False).mean()
     df_15['EMA_200'] = df_15['close'].ewm(span=200, adjust=False).mean()
     alcista_15 = df_15['EMA_50'].iloc[-1] > df_15['EMA_200'].iloc[-1]
     
-    # 2. Generamos y analizamos datos para Lenta (30m)
+    # 2. Analizar Lenta (30m)
     df_30 = generar_datos_simulados_para_indicadores(precio_actual)
     df_30['EMA_50'] = df_30['close'].ewm(span=50, adjust=False).mean()
     df_30['EMA_200'] = df_30['close'].ewm(span=200, adjust=False).mean()
     alcista_30 = df_30['EMA_50'].iloc[-1] > df_30['EMA_200'].iloc[-1]
     
-    # 3. Cruzamos los datos
     tendencia_15 = "📈 ALCISTA" if alcista_15 else "📉 BAJISTA"
     tendencia_30 = "📈 ALCISTA" if alcista_30 else "📉 BAJISTA"
     
@@ -307,7 +306,6 @@ def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
             semaforo = "🔴 *PELIGRO MÁXIMO (CONSIDERA CERRAR)*"
             consejo = "Ambas temporalidades están alcistas. Estás vendido en contra de toda la presión compradora. Se recomienda encarecidamente cerrar la venta para evitar pérdidas mayores."
 
-    # Formateamos el reporte final
     texto_consejo = (
         f"🧠 *CONSEJERO DE OPERACIONES EN VIVO*\n\n"
         f"💰 *Precio Actual:* ${precio_actual:,.2f} USD\n"
@@ -333,7 +331,6 @@ def escuchar_botones_en_segundo_plano():
     offset = 0
     print("🎧 Bot de Telegram escuchando eventos...")
     
-    # Intenta enviar el teclado interactivo al iniciarse
     try:
         enviar_teclado_interactivo(MI_CHAT_ID)
     except Exception as e:
@@ -363,16 +360,16 @@ def escuchar_botones_en_segundo_plano():
                     url_answer = f"{URL_TELEGRAM}/answerCallbackQuery?callback_query_id={query_id}"
                     urllib.request.urlopen(url_answer)
                     
-                   if user_id in USUARIOS_AUTORIZADOS:
-    if data_boton == "analizar_15m":
-        generar_y_enviar_analisis(chat_id, "15m", "⚡ SCALPING")
-    elif data_boton == "analizar_30m":
-        generar_y_enviar_analisis(chat_id, "30m", "🐢 LENTA")
-    elif data_boton == "consejo_compra":
-        obtener_consejo_operacion(chat_id, "compra")
-    elif data_boton == "consejo_venta":
-        obtener_consejo_operacion(chat_id, "venta")
-    enviar_teclado_interactivo(chat_id)
+                    if user_id in USUARIOS_AUTORIZADOS:
+                        if data_boton == "analizar_15m":
+                            generar_y_enviar_analisis(chat_id, "15m", "⚡ SCALPING")
+                        elif data_boton == "analizar_30m":
+                            generar_y_enviar_analisis(chat_id, "30m", "🐢 LENTA")
+                        elif data_boton == "consejo_compra":
+                            obtener_consejo_operacion(chat_id, "compra")
+                        elif data_boton == "consejo_venta":
+                            obtener_consejo_operacion(chat_id, "venta")
+                        enviar_teclado_interactivo(chat_id)
                         
             time.sleep(1)
         except Exception as e:
@@ -380,7 +377,7 @@ def escuchar_botones_en_segundo_plano():
             time.sleep(2)
 
 # ==========================================
-# 🌐 SERVIDOR FLASK (Para Hugging Face)
+# 🌐 SERVIDOR FLASK (Para Hugging Face / Render)
 # ==========================================
 app = Flask(__name__)
 
@@ -389,13 +386,9 @@ def home():
     return "🤖 El bot de oro está vivo y escuchando en segundo plano."
 
 def run_web_server():
-    # Hugging Face abre siempre el puerto 7860 para Spaces
     app.run(host='0.0.0.0', port=7860)
 
 if __name__ == '__main__':
-    # Lanzar el servidor web Flask en un hilo independiente
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-    
-    # Ejecutar el bucle de Telegram en el hilo principal
     escuchar_botones_en_segundo_plano()
