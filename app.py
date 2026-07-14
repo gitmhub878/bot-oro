@@ -18,7 +18,6 @@ URL_TELEGRAM = f"https://api.telegram.org/bot{TOKEN_BOT}"
 GOLD_API_KEY = "goldapi-ff74bdecd701477d4a6eb79850b6e8f1-io" 
 
 # 🛡️ LISTA BLANCA DE PRIVACIDAD (¡Añade aquí el ID de tu marido separado por una coma!)
-# Ejemplo: [1820732318, 987654321]
 USUARIOS_AUTORIZADOS = [1820732318]
 
 # ==========================================
@@ -129,9 +128,12 @@ def calcular_tasa_acierto_historica(df):
 
 def enviar_teclado_interactivo(chat_id):
     texto = (
-        "📊 *PANEL DE CONTROL DE XAUUSD (GOLD-API)* 📊\n\n"
-        "👉 *Análisis:* Selecciona una temporalidad para ver el gráfico.\n"
-        "👉 *¿Estás operando?:* Pulsa los botones de abajo para que el bot te aconseje según la situación actual del mercado."
+        "📊 *PANEL DE CONTROL DE XAUUSD* 📊\n\n"
+        "👉 *Análisis:* Selecciona una temporalidad para ver el gráfico.\n\n"
+        "👉 *¿Tienes una operación abierta?:*\n"
+        "Escríbeme un mensaje con el formato:\n"
+        "`compra precio lotaje`  o  `venta precio lotaje`\n\n"
+        "✏️ *Ejemplo:* `compra 2345.50 0.1` o `venta 2350.00 0.5`"
     )
     keyboard = {
         "inline_keyboard": [
@@ -140,8 +142,7 @@ def enviar_teclado_interactivo(chat_id):
                 {"text": "🐢 Analizar Lenta (30m)", "callback_data": "analizar_30m"}
             ],
             [
-                {"text": "🟢 Estoy Comprado", "callback_data": "consejo_compra"},
-                {"text": "🔴 Estoy Vendido", "callback_data": "consejo_venta"}
+                {"text": "🟢 ¿Cómo calculo mi operación?", "callback_data": "ayuda_calculo"}
             ]
         ]
     }
@@ -254,19 +255,27 @@ def generar_y_enviar_analisis(chat_id, temporalidad_nombre, nombre_estrategia):
     except Exception as e:
         print(f"❌ Error al enviar gráfico a Telegram: {e}")
 
-def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
-    """Analiza 15m y 30m a la vez para aconsejar al usuario sobre su operación activa"""
+def analizar_operacion_personalizada(chat_id, tipo, precio_entrada, lotaje):
+    """Calcula ganancias/pérdidas en pips y USD, y aconseja al usuario en base al mercado real"""
     precio_actual = obtener_precio_oro_realtime()
     if precio_actual is None:
         return
         
-    # 1. Analizar Scalping (15m)
+    # 1. Cálculos de Trading para Oro (1 lote = 100 onzas de oro)
+    # Diferencia de precio en USD
+    diferencia = precio_actual - precio_entrada if tipo == "compra" else precio_entrada - precio_actual
+    pips = diferencia * 10 # En oro, 0.1 USD = 1 Pip, por tanto multiplicar por 10 da los pips directos.
+    
+    # 1 lote standard en oro = 100 USD de beneficio/pérdida por cada 1 USD de movimiento de precio.
+    ganancia_usd = diferencia * lotaje * 100
+    porcentaje_movimiento = (diferencia / precio_entrada) * 100
+    
+    # 2. Análisis del mercado (15m y 30m)
     df_15 = generar_datos_simulados_para_indicadores(precio_actual)
     df_15['EMA_50'] = df_15['close'].ewm(span=50, adjust=False).mean()
     df_15['EMA_200'] = df_15['close'].ewm(span=200, adjust=False).mean()
     alcista_15 = df_15['EMA_50'].iloc[-1] > df_15['EMA_200'].iloc[-1]
     
-    # 2. Analizar Lenta (30m)
     df_30 = generar_datos_simulados_para_indicadores(precio_actual)
     df_30['EMA_50'] = df_30['close'].ewm(span=50, adjust=False).mean()
     df_30['EMA_200'] = df_30['close'].ewm(span=200, adjust=False).mean()
@@ -275,49 +284,58 @@ def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
     tendencia_15 = "📈 ALCISTA" if alcista_15 else "📉 BAJISTA"
     tendencia_30 = "📈 ALCISTA" if alcista_30 else "📉 BAJISTA"
     
+    # 3. Determinar consejo y semáforo
     consejo = ""
     semaforo = ""
     
-    if tipo_operacion_usuario == "compra":
+    if tipo == "compra":
         if alcista_15 and alcista_30:
             semaforo = "🟢 *ALINEACIÓN PERFECTA (MANTENER)*"
-            consejo = "Ambas temporalidades (15m y 30m) están alcistas. El mercado empuja a tu favor. Mantén la posición abierta y asegura ganancias subiendo tu Stop Loss (Trailing Stop) si ya estás en positivo."
+            consejo = "El mercado está empujando fuerte a tu favor en 15m y 30m. Todo apunta a que puedes aguantar la compra."
         elif alcista_30 and not alcista_15:
-            semaforo = "🟡 *PRECAUCIÓN (REBOTANDO EN CORTO)*"
-            consejo = "La tendencia lenta (30m) sigue siendo alcista, pero el scalping (15m) se ha girado a la baja. Podría ser un retroceso temporal. Si tu stop está bien colocado debajo del último mínimo, mantén, pero no añadas más posiciones."
+            semaforo = "🟡 *PRECAUCIÓN (RECESO CORTO)*"
+            consejo = "La tendencia de 30m es alcista, pero el scalping se gira a la baja. Puede ser solo una corrección técnica."
         elif alcista_15 and not alcista_30:
-            semaforo = "🟡 *ALERTA (REBOTE PASAJERO)*"
-            consejo = "El scalping (15m) está subiendo, pero la tendencia mayor (30m) es bajista. Ten mucho cuidado, podría ser solo un rebote para seguir cayendo. Considera cerrar parciales o proteger la entrada a precio de coste (Breakeven)."
+            semaforo = "🟡 *ALERTA (REBOTE TEMPORAL)*"
+            consejo = "Sube en el corto plazo (15m) pero la tendencia mayor (30m) es bajista. Considera proteger en Breakeven (coste $0) o cobrar algo."
         else:
             semaforo = "🔴 *PELIGRO MÁXIMO (CONSIDERA CERRAR)*"
-            consejo = "Tanto 15m como 30m están bajistas. Estás operando completamente en contra de la tendencia del mercado. Lo más sensato aquí suele ser cortar pérdidas rápido o cerrar la operación antes de que toque tu Stop Loss completo."
-
-    elif tipo_operacion_usuario == "venta":
+            consejo = "El oro está bajista en todas las temporalidades analizadas. Operación muy expuesta a pérdidas mayores."
+            
+    else: # Venta
         if not alcista_15 and not alcista_30:
             semaforo = "🟢 *ALINEACIÓN PERFECTA (MANTENER)*"
-            consejo = "Ambas temporalidades (15m y 30m) están bajistas. El mercado cae con fuerza a tu favor. Deja correr las ganancias y asegura tu operación bajando tu Stop Loss."
+            consejo = "El oro cae con fuerza en 15m y 30m. Tu venta va en sintonía perfecta con la tendencia del mercado."
         elif not alcista_30 and alcista_15:
             semaforo = "🟡 *PRECAUCIÓN (CORRECCIÓN AL ALZA)*"
-            consejo = "La tendencia lenta (30m) es bajista, pero el scalping rápido (15m) se ha girado al alza. Podría ser una corrección para buscar liquidez. Si el precio no rompe la EMA 200 de la gráfica lenta, la venta sigue viva."
+            consejo = "La tendencia lenta es bajista, pero el scalping sube. Si no pasa las EMAs superiores, tu venta sigue a salvo."
         elif not alcista_15 and alcista_30:
             semaforo = "🟡 *ALERTA (PELIGRO DE GIRO)*"
-            consejo = "El scalping está cayendo, pero la tendencia principal (30m) es alcista. Estás vendiendo en un mercado mayormente comprador. Protege la operación lo antes posible."
+            consejo = "Cae en 15m pero la tendencia general (30m) sigue siendo compradora. Protege tu entrada cuanto antes."
         else:
             semaforo = "🔴 *PELIGRO MÁXIMO (CONSIDERA CERRAR)*"
-            consejo = "Ambas temporalidades están alcistas. Estás vendido en contra de toda la presión compradora. Se recomienda encarecidamente cerrar la venta para evitar pérdidas mayores."
+            consejo = "Todo el mercado está subiendo con fuerza en 15m y 30m. Mantener esta venta es ir totalmente a contracorriente."
 
-    texto_consejo = (
-        f"🧠 *CONSEJERO DE OPERACIONES EN VIVO*\n\n"
-        f"💰 *Precio Actual:* ${precio_actual:,.2f} USD\n"
+    # Formatear el resultado final
+    estado_usd = "📈 Ganancia" if ganancia_usd >= 0 else "📉 Pérdida"
+    simbolo_porcentaje = "+" if ganancia_usd >= 0 else ""
+    
+    texto_resultado = (
+        f"📊 *ANÁLISIS DE TU POSICIÓN ACTIVA* 📊\n"
+        f"📌 *Operación:* `{tipo.upper()}` | *Lotaje:* `{lotaje}` Lotes\n"
+        f"📥 *Entrada:* `${precio_entrada:,.2f}` | *Precio actual:* `${precio_actual:,.2f}`\n\n"
+        f"💰 *Resultado Estimado:*\n"
+        f"💲 *{estado_usd}:* `{ganancia_usd:+.2f} USD` *(aprox. {pips:+.1f} pips)*\n"
+        f"📐 *Variación:* `{simbolo_porcentaje}{porcentaje_movimiento:.2f}%` desde tu entrada\n\n"
+        f"🚦 *Semaforo:* {semaforo}\n"
         f"⚡ *Scalping (15m):* {tendencia_15}\n"
         f"🐢 *Lenta (30m):* {tendencia_30}\n\n"
-        f"🚦 *Estado:* {semaforo}\n\n"
         f"💡 *Recomendación:* {consejo}"
     )
     
     payload = {
         "chat_id": chat_id,
-        "text": texto_consejo,
+        "text": texto_resultado,
         "parse_mode": "Markdown"
     }
     req_url = f"{URL_TELEGRAM}/sendMessage"
@@ -325,7 +343,7 @@ def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
     try:
         urllib.request.urlopen(req_url, data=req_data)
     except Exception as e:
-        print(f"❌ Error al enviar consejo: {e}")
+        print(f"❌ Error al enviar análisis de operación: {e}")
 
 def escuchar_botones_en_segundo_plano():
     offset = 0
@@ -345,12 +363,39 @@ def escuchar_botones_en_segundo_plano():
             for update in resultado.get("result", []):
                 offset = update["update_id"] + 1
                 
+                # 📩 DETECTAR SI EL USUARIO ESCRIBE UN MENSAJE DE TEXTO
                 if "message" in update:
                     user_id = update["message"]["from"]["id"]
                     chat_id = update["message"]["chat"]["id"]
+                    texto_msg = update["message"].get("text", "").lower().strip()
+                    
                     if user_id in USUARIOS_AUTORIZADOS:
-                        enviar_teclado_interactivo(chat_id)
+                        # Comprobar si el mensaje empieza por "compra" o "venta"
+                        partes = texto_msg.split()
+                        if len(partes) == 3 and partes[0] in ["compra", "venta"]:
+                            try:
+                                tipo_op = partes[0]
+                                precio_ent = float(partes[1].replace(",", "."))
+                                lotaje_op = float(partes[2].replace(",", "."))
+                                
+                                # Ejecutar el súper análisis personalizado
+                                analizar_operacion_personalizada(chat_id, tipo_op, precio_ent, lotaje_op)
+                                enviar_teclado_interactivo(chat_id)
+                            except ValueError:
+                                # Si los números están mal escritos
+                                payload = {
+                                    "chat_id": chat_id,
+                                    "text": "❌ *Error de formato.*\n\nAsegúrate de escribir números válidos.\n✏️ *Ejemplo:* `compra 2345.50 0.1`",
+                                    "parse_mode": "Markdown"
+                                }
+                                req_url = f"{URL_TELEGRAM}/sendMessage"
+                                req_data = urllib.parse.urlencode(payload).encode('utf-8')
+                                urllib.request.urlopen(req_url, data=req_data)
+                        else:
+                            # Si escribe otra cosa, le recordamos cómo usar el bot
+                            enviar_teclado_interactivo(chat_id)
                 
+                # 🖱️ DETECTAR CLICS EN BOTONES
                 elif "callback_query" in update:
                     user_id = update["callback_query"]["from"]["id"]
                     chat_id = update["callback_query"]["message"]["chat"]["id"]
@@ -365,10 +410,24 @@ def escuchar_botones_en_segundo_plano():
                             generar_y_enviar_analisis(chat_id, "15m", "⚡ SCALPING")
                         elif data_boton == "analizar_30m":
                             generar_y_enviar_analisis(chat_id, "30m", "🐢 LENTA")
-                        elif data_boton == "consejo_compra":
-                            obtener_consejo_operacion(chat_id, "compra")
-                        elif data_boton == "consejo_venta":
-                            obtener_consejo_operacion(chat_id, "venta")
+                        elif data_boton == "ayuda_calculo":
+                            texto_ayuda = (
+                                "ℹ️ *¿Cómo analizar tu posición activa?*\n\n"
+                                "No necesitas pulsar botones especiales. Simplemente escríbeme directamente un mensaje en el chat con tus datos.\n\n"
+                                "✍️ *Usa este formato:* \n"
+                                "`[tipo] [precio de entrada] [lotaje]`\n\n"
+                                "📈 *Ejemplo para Compra:* `compra 2345.50 0.1`\n"
+                                "📉 *Ejemplo para Venta:* `venta 2350.00 0.2`"
+                            )
+                            payload = {
+                                "chat_id": chat_id,
+                                "text": texto_ayuda,
+                                "parse_mode": "Markdown"
+                            }
+                            req_url = f"{URL_TELEGRAM}/sendMessage"
+                            req_data = urllib.parse.urlencode(payload).encode('utf-8')
+                            urllib.request.urlopen(req_url, data=req_data)
+                            
                         enviar_teclado_interactivo(chat_id)
                         
             time.sleep(1)
