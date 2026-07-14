@@ -130,13 +130,18 @@ def calcular_tasa_acierto_historica(df):
 def enviar_teclado_interactivo(chat_id):
     texto = (
         "📊 *PANEL DE CONTROL DE XAUUSD (GOLD-API)* 📊\n\n"
-        "Selecciona qué temporalidad quieres analizar en este preciso instante:"
+        "👉 *Análisis:* Selecciona una temporalidad para ver el gráfico.\n"
+        "👉 *¿Estás operando?:* Pulsa los botones de abajo para que el bot te aconseje según la situación actual del mercado."
     )
     keyboard = {
         "inline_keyboard": [
             [
                 {"text": "⚡ Analizar Scalping (15m)", "callback_data": "analizar_15m"},
                 {"text": "🐢 Analizar Lenta (30m)", "callback_data": "analizar_30m"}
+            ],
+            [
+                {"text": "🟢 Estoy Comprado", "callback_data": "consejo_compra"},
+                {"text": "🔴 Estoy Vendido", "callback_data": "consejo_venta"}
             ]
         ]
     }
@@ -249,6 +254,81 @@ def generar_y_enviar_analisis(chat_id, temporalidad_nombre, nombre_estrategia):
     except Exception as e:
         print(f"❌ Error al enviar gráfico a Telegram: {e}")
 
+def obtener_consejo_operacion(chat_id, tipo_operacion_usuario):
+    """Analiza 15m y 30m a la vez para aconsejar al usuario sobre su operación activa"""
+    precio_actual = obtener_precio_oro_realtime()
+    if precio_actual is None:
+        return
+        
+    # 1. Generamos y analizamos datos para Scalping (15m)
+    df_15 = generar_datos_simulados_para_indicadores(precio_actual)
+    df_15['EMA_50'] = df_15['close'].ewm(span=50, adjust=False).mean()
+    df_15['EMA_200'] = df_15['close'].ewm(span=200, adjust=False).mean()
+    alcista_15 = df_15['EMA_50'].iloc[-1] > df_15['EMA_200'].iloc[-1]
+    
+    # 2. Generamos y analizamos datos para Lenta (30m)
+    df_30 = generar_datos_simulados_para_indicadores(precio_actual)
+    df_30['EMA_50'] = df_30['close'].ewm(span=50, adjust=False).mean()
+    df_30['EMA_200'] = df_30['close'].ewm(span=200, adjust=False).mean()
+    alcista_30 = df_30['EMA_50'].iloc[-1] > df_30['EMA_200'].iloc[-1]
+    
+    # 3. Cruzamos los datos
+    tendencia_15 = "📈 ALCISTA" if alcista_15 else "📉 BAJISTA"
+    tendencia_30 = "📈 ALCISTA" if alcista_30 else "📉 BAJISTA"
+    
+    consejo = ""
+    semaforo = ""
+    
+    if tipo_operacion_usuario == "compra":
+        if alcista_15 and alcista_30:
+            semaforo = "🟢 *ALINEACIÓN PERFECTA (MANTENER)*"
+            consejo = "Ambas temporalidades (15m y 30m) están alcistas. El mercado empuja a tu favor. Mantén la posición abierta y asegura ganancias subiendo tu Stop Loss (Trailing Stop) si ya estás en positivo."
+        elif alcista_30 and not alcista_15:
+            semaforo = "🟡 *PRECAUCIÓN (REBOTANDO EN CORTO)*"
+            consejo = "La tendencia lenta (30m) sigue siendo alcista, pero el scalping (15m) se ha girado a la baja. Podría ser un retroceso temporal. Si tu stop está bien colocado debajo del último mínimo, mantén, pero no añadas más posiciones."
+        elif alcista_15 and not alcista_30:
+            semaforo = "🟡 *ALERTA (REBOTE PASAJERO)*"
+            consejo = "El scalping (15m) está subiendo, pero la tendencia mayor (30m) es bajista. Ten mucho cuidado, podría ser solo un rebote para seguir cayendo. Considera cerrar parciales o proteger la entrada a precio de coste (Breakeven)."
+        else:
+            semaforo = "🔴 *PELIGRO MÁXIMO (CONSIDERA CERRAR)*"
+            consejo = "Tanto 15m como 30m están bajistas. Estás operando completamente en contra de la tendencia del mercado. Lo más sensato aquí suele ser cortar pérdidas rápido o cerrar la operación antes de que toque tu Stop Loss completo."
+
+    elif tipo_operacion_usuario == "venta":
+        if not alcista_15 and not alcista_30:
+            semaforo = "🟢 *ALINEACIÓN PERFECTA (MANTENER)*"
+            consejo = "Ambas temporalidades (15m y 30m) están bajistas. El mercado cae con fuerza a tu favor. Deja correr las ganancias y asegura tu operación bajando tu Stop Loss."
+        elif not alcista_30 and alcista_15:
+            semaforo = "🟡 *PRECAUCIÓN (CORRECCIÓN AL ALZA)*"
+            consejo = "La tendencia lenta (30m) es bajista, pero el scalping rápido (15m) se ha girado al alza. Podría ser una corrección para buscar liquidez. Si el precio no rompe la EMA 200 de la gráfica lenta, la venta sigue viva."
+        elif not alcista_15 and alcista_30:
+            semaforo = "🟡 *ALERTA (PELIGRO DE GIRO)*"
+            consejo = "El scalping está cayendo, pero la tendencia principal (30m) es alcista. Estás vendiendo en un mercado mayormente comprador. Protege la operación lo antes posible."
+        else:
+            semaforo = "🔴 *PELIGRO MÁXIMO (CONSIDERA CERRAR)*"
+            consejo = "Ambas temporalidades están alcistas. Estás vendido en contra de toda la presión compradora. Se recomienda encarecidamente cerrar la venta para evitar pérdidas mayores."
+
+    # Formateamos el reporte final
+    texto_consejo = (
+        f"🧠 *CONSEJERO DE OPERACIONES EN VIVO*\n\n"
+        f"💰 *Precio Actual:* ${precio_actual:,.2f} USD\n"
+        f"⚡ *Scalping (15m):* {tendencia_15}\n"
+        f"🐢 *Lenta (30m):* {tendencia_30}\n\n"
+        f"🚦 *Estado:* {semaforo}\n\n"
+        f"💡 *Recomendación:* {consejo}"
+    )
+    
+    payload = {
+        "chat_id": chat_id,
+        "text": texto_consejo,
+        "parse_mode": "Markdown"
+    }
+    req_url = f"{URL_TELEGRAM}/sendMessage"
+    req_data = urllib.parse.urlencode(payload).encode('utf-8')
+    try:
+        urllib.request.urlopen(req_url, data=req_data)
+    except Exception as e:
+        print(f"❌ Error al enviar consejo: {e}")
+
 def escuchar_botones_en_segundo_plano():
     offset = 0
     print("🎧 Bot de Telegram escuchando eventos...")
@@ -283,12 +363,16 @@ def escuchar_botones_en_segundo_plano():
                     url_answer = f"{URL_TELEGRAM}/answerCallbackQuery?callback_query_id={query_id}"
                     urllib.request.urlopen(url_answer)
                     
-                    if user_id in USUARIOS_AUTORIZADOS:
-                        if data_boton == "analizar_15m":
-                            generar_y_enviar_analisis(chat_id, "15m", "⚡ SCALPING")
-                        elif data_boton == "analizar_30m":
-                            generar_y_enviar_analisis(chat_id, "30m", "🐢 LENTA")
-                        enviar_teclado_interactivo(chat_id)
+                   if user_id in USUARIOS_AUTORIZADOS:
+    if data_boton == "analizar_15m":
+        generar_y_enviar_analisis(chat_id, "15m", "⚡ SCALPING")
+    elif data_boton == "analizar_30m":
+        generar_y_enviar_analisis(chat_id, "30m", "🐢 LENTA")
+    elif data_boton == "consejo_compra":
+        obtener_consejo_operacion(chat_id, "compra")
+    elif data_boton == "consejo_venta":
+        obtener_consejo_operacion(chat_id, "venta")
+    enviar_teclado_interactivo(chat_id)
                         
             time.sleep(1)
         except Exception as e:
